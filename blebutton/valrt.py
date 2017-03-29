@@ -1,6 +1,7 @@
 import time
 from uuid import UUID
 import logging
+import sys
 
 import pygatt.backends
 
@@ -11,13 +12,14 @@ class VAlrtButton(object):
     # 0x5c 0001
     # 0x62 disconnect?
     
-    def __init__(self, address, mode=None, event_handler=None):
+    def __init__(self, address, mode=0x01, event_handler=None, auto_reconnect=False):
         self.address = address
         self._connection = None
         self.mode = mode
         self._serial = None
         self._revision = None
         self.event_handler = event_handler
+        self.auto_reconnect = False
 
     @property
     def connection(self):
@@ -33,6 +35,12 @@ class VAlrtButton(object):
         else:
             return None
 
+    def reconnect(self, nonce):
+        if self.auto_reconnect:
+            logger.debug("Auto-reconnecting")
+            self._connection = None
+            self.connection
+
     def command(self, handle, data_array):
         logger.debug("sending: {0} to {1}".format(data_array, handle))
         self.connection.char_write_handle( handle, bytearray(data_array), wait_for_response=True, timeout=20)
@@ -41,11 +49,15 @@ class VAlrtButton(object):
         # init connection
         self.command(0x0059, [0x80, 0xbe, 0xf5, 0xac, 0xff])
         self.button_mode()
+        self.connection.discover_characteristics(timeout=60)
         self.register_button_event_handler()
         self.read_serial()
         self.read_revision()
+        if self.auto_reconnect:
+            self.connection.register_callback('disconnected', self.reconnect)
 
     def disconnect(self):
+        self.auto_reconnect = False
         self.connection.disconnect()
 
     def beep_forever(self):
@@ -130,7 +142,7 @@ class VAlrtButton(object):
          * 4 drop sense?
         """
         if self.event_handler:
-            self.event_handler(value)
+            self.event_handler(int(value[0]))
         logger.debug("got buttton event: {0}".format(value))
         
     def button_mode(self, mode=None):
@@ -145,9 +157,16 @@ class VAlrtButton(object):
         self.command(0x004f, [mode or self.mode])
         
 if __name__ == "__main__":
-    vbtn = VAlrtButton("7c:66:9d:71:14:40", 0x01)
+    global_logger = logging.getLogger('')
+    global_logger.setLevel(logging.DEBUG)
+    stream_handler = logging.StreamHandler(sys.__stdout__)
+    stream_handler.setLevel(logging.DEBUG)
+    stream_handler.setFormatter(logging.Formatter('%(asctime)s %(name)s %(levelname)s %(message)s'))
+    global_logger.addHandler(stream_handler)
+
+    vbtn = VAlrtButton("7c:66:9d:71:14:40", auto_reconnect=True)
     vbtn.connect()
     vbtn.alarm_mode(0x00)
-    time.sleep(60)
+    time.sleep(600)
     vbtn.beep()
     vbtn.disconnect()
